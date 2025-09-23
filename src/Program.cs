@@ -1,3 +1,4 @@
+using System.Text;
 using static System.Buffers.Binary.BinaryPrimitives;
 
 // Parse arguments
@@ -18,6 +19,14 @@ if (command == ".dbinfo")
   Console.WriteLine($"database page size: {ReadInt16(databaseFile, 16)}");
   Console.WriteLine($"number of tables: {ReadInt16(databaseFile, 103)}");
 }
+else if (command == ".tables")
+{
+  var tables = GetTables(databaseFile);
+  foreach (var table in tables)
+  {
+    Console.WriteLine(table.tblName); 
+  }
+}
 else
 {
   throw new InvalidOperationException($"Invalid command: {command}");
@@ -25,8 +34,99 @@ else
 
 static int ReadInt16(FileStream bufStream, int offset)
 {
-  Span<byte> pageSizeBytes = stackalloc byte[2];
+  Span<byte> buffer = stackalloc byte[2];
   bufStream.Seek(offset, SeekOrigin.Begin);
-  bufStream.ReadExactly(pageSizeBytes);
-  return ReadUInt16BigEndian(pageSizeBytes);
+  bufStream.ReadExactly(buffer);
+  return ReadUInt16BigEndian(buffer);
 }
+
+static int ReadVarInt(FileStream bufStream, ref int offset)
+{
+  Span<byte> buffer = stackalloc byte[9];
+  bufStream.Seek(offset, SeekOrigin.Begin);
+  bufStream.ReadExactly(buffer);
+
+  int value = 0;
+  for (int i = 0; i < 8; i++)
+  {
+    offset++;
+    value = (value << 7) | (buffer[i] & 0x7F);
+    if ((buffer[i] & 0x80) == 0)
+      return value;
+  }
+
+  // Handle last byte specially
+  value = (value << 8) | buffer[8];
+  offset++;
+  return value;
+};
+
+static TABLE[] GetTables(FileStream bufStream)
+{
+  int cellCount = ReadInt16(bufStream, 103);
+  List<TABLE> tables = [];
+  for (int i = 0; i < cellCount; ++i)
+  {
+    int cellPtrOffset = 108;
+    int cellContentOffset = ReadInt16(bufStream, cellPtrOffset + i * 2);
+    TABLE tableName = GetTable(bufStream, cellContentOffset);
+    tables.Add(tableName);
+  }
+  return [.. tables];
+}
+
+static TABLE GetTable(FileStream bufStream, int offset)
+{
+  int cellOffset = offset;
+  int payloadSize = ReadVarInt(bufStream, ref cellOffset);
+  int rowid = ReadVarInt(bufStream, ref cellOffset);
+
+  bufStream.Seek(cellOffset, SeekOrigin.Begin);
+  int headerSize = bufStream.ReadByte();
+  int savedOffset = cellOffset;
+  int dataOffset = savedOffset + headerSize;
+
+  cellOffset += 1; // Skip header size byte
+  TABLE res = new();
+  Span<byte> stackBuf = stackalloc byte[512];
+
+  for (int col = 0; col < 5 && ((cellOffset - savedOffset) < headerSize); ++col)
+  {
+    int serialType = ReadVarInt(bufStream, ref cellOffset);
+
+    if (serialType >= 13 && serialType % 2 == 1)
+    {
+      int strLen = (serialType - 13) / 2;
+      Span<byte> buffer = strLen <= 512 ? stackBuf[..strLen] : new byte[strLen];
+      bufStream.Seek(dataOffset, SeekOrigin.Begin);
+      bufStream.ReadExactly(buffer);
+      var str = Encoding.ASCII.GetString(buffer);
+      switch (col)
+      {
+        case 0: res.type = str; break;    // sqlite_schema.type
+        case 1: res.name = str; break;    // sqlite_schema.name
+        case 2: res.tblName = str; break; // sqlite_schema.tblName
+        case 4: res.sql = str; break;     // sqlite_schema.sql
+      }
+      dataOffset += strLen;
+    }
+  }
+  return res;
+}
+
+struct TABLE
+{
+    public string? type;
+    public string? name;
+    public string? tblName;
+    public string? sql;
+    public int? rootpage;
+    public int rowCount;
+    public List<int>? cells;
+    public List<int>? indexRowids;
+
+    public TABLE()
+    {
+        rowCount = 0;
+    }
+};
