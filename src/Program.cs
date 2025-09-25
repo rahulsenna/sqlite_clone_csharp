@@ -1,6 +1,12 @@
 using System.Text;
 using static System.Buffers.Binary.BinaryPrimitives;
 
+
+const byte INTERIOR_INDEX = 0x02;
+const byte INTERIOR_TABLE = 0x05;
+const byte LEAF_INDEX = 0x0a;
+const byte LEAF_TABLE = 0x0D;
+
 // Parse arguments
 var (path, command) = args.Length switch
 {
@@ -24,7 +30,25 @@ else if (command == ".tables")
   var tables = GetTables(databaseFile);
   foreach (var table in tables)
   {
-    Console.WriteLine(table.tblName); 
+    Console.WriteLine(table.tblName);
+  }
+}
+else if (command.StartsWith("select count(*) from"))
+{
+  string tableName = command[(command.LastIndexOf(' ') + 1)..];
+  TABLE table = GetTables(databaseFile).First(t => t.tblName == tableName);
+
+  int tablePageNumber = table.rootpage - 1;
+  int pageSize = ReadInt16(databaseFile, 16);
+  int tableOffset = pageSize * tablePageNumber;
+
+  databaseFile.Seek(tableOffset, SeekOrigin.Begin);
+  byte pageType = (byte)databaseFile.ReadByte();
+
+  if (pageType == LEAF_TABLE)
+  {
+    int cell_count = ReadInt16(databaseFile, tableOffset + 3);
+    Console.WriteLine(cell_count);
   }
 }
 else
@@ -110,23 +134,67 @@ static TABLE GetTable(FileStream bufStream, int offset)
       }
       dataOffset += strLen;
     }
+    else if (col == 3)                    // sqlite_schema.rootpage
+    {
+      var (value, bytesRead) = ParseRootPage(bufStream, dataOffset, serialType);
+      res.rootpage = value;
+      dataOffset += bytesRead;
+    }
   }
   return res;
 }
 
+static (int, int) ParseRootPage(FileStream bufStream, int offset, int serialType)
+{
+  if (serialType == 0 || serialType == 8 || serialType == 9 || serialType == 12 || serialType == 13)
+    return (0, 0);
+
+  int res = -1;
+
+  bufStream.Seek(offset, SeekOrigin.Begin);
+  if (serialType == 1)
+  {
+    res = bufStream.ReadByte();
+  }
+  else if (serialType == 2)
+  {
+    Span<byte> buffer = stackalloc byte[2];
+    bufStream.ReadExactly(buffer);
+    res = (buffer[0] << 8) | buffer[1];
+  }
+  else if (serialType == 3)
+  {
+    Span<byte> buffer = stackalloc byte[3];
+    bufStream.ReadExactly(buffer);
+    res = (buffer[0] << 16) | (buffer[1] << 8) | buffer[2];
+
+  }
+  else if (serialType == 4)
+  {
+    Span<byte> buffer = stackalloc byte[4];
+    bufStream.ReadExactly(buffer);
+    res = (buffer[0] << 24) | (buffer[1] << 16) | (buffer[2] << 8) | buffer[3];
+  }
+  else
+  {
+    throw new Exception("unknown serialType");
+  }
+
+  return (res, serialType);
+}
+
 struct TABLE
 {
-    public string? type;
-    public string? name;
-    public string? tblName;
-    public string? sql;
-    public int? rootpage;
-    public int rowCount;
-    public List<int>? cells;
-    public List<int>? indexRowids;
+  public string type = "";
+  public string name = "";
+  public string tblName = "";
+  public string sql = "";
+  public int rootpage = 0;
+  public int rowCount = 0;
+  public List<int> cells = [];
+  public List<int> indexRowids = [];
 
-    public TABLE()
-    {
-        rowCount = 0;
-    }
-};
+  public TABLE()
+  {
+  }
+}
