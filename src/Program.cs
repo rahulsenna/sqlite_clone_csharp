@@ -40,15 +40,29 @@ else if (command.StartsWith("select count(*) from"))
 
   int tablePageNumber = table.rootpage - 1;
   int pageSize = ReadInt16(databaseFile, 16);
-  int tableOffset = pageSize * tablePageNumber;
+  ProcessTable(ref table, databaseFile, pageSize, tablePageNumber);
+  Console.WriteLine(table.rowCount);
+}
+else if (command.StartsWith("select"))
+{
+  string[] parts = command.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+  string columnName = parts[1];
+  string tableName = parts[3];
 
-  databaseFile.Seek(tableOffset, SeekOrigin.Begin);
-  byte pageType = (byte)databaseFile.ReadByte();
+  TABLE table = GetTables(databaseFile).First(t => t.tblName == tableName);
 
-  if (pageType == LEAF_TABLE)
+  if (table.sql == null)
+    return;
+
+  string everyColStr = table.sql[(table.sql.IndexOf('(') + 1)..];
+  string[] columns = [.. everyColStr.Split(',', StringSplitOptions.TrimEntries).Select(str => str.Split(' ')[0])];
+
+  int columnIndex = Array.IndexOf(columns, columnName);
+  int pageSize = ReadInt16(databaseFile, 16);
+  ProcessTable(ref table, databaseFile, pageSize, table.rootpage - 1);
+  foreach (var cell in table.cells)
   {
-    int cell_count = ReadInt16(databaseFile, tableOffset + 3);
-    Console.WriteLine(cell_count);
+    PrintRow(databaseFile, cell, columnIndex);
   }
 }
 else
@@ -84,6 +98,88 @@ static int ReadVarInt(FileStream bufStream, ref int offset)
   offset++;
   return value;
 };
+
+void PrintRow(FileStream file, int cellOffset, int columnIndex)
+{
+  int payloadSize = ReadVarInt(file, ref cellOffset);
+  int rowId = ReadVarInt(file, ref cellOffset);
+
+  int payloadOffset = cellOffset;
+  file.Seek(cellOffset, SeekOrigin.Begin);
+  int headerSize = file.ReadByte();
+  int contentOffset = payloadOffset + headerSize;
+  Span<byte> stackBuf = stackalloc byte[512];
+
+  for (int idx = 1, strOffset = 0; (cellOffset - payloadOffset) < headerSize;)
+  {
+    int serialType = ReadVarInt(file, ref cellOffset);
+    if (serialType > 13)
+    {
+      int strLen = (serialType - 13) / 2;
+      if (idx == columnIndex)
+      {
+        Span<byte> buffer = strLen <= 512 ? stackBuf[..strLen] : new byte[strLen];
+        file.Seek(contentOffset + strOffset, SeekOrigin.Begin);
+        file.ReadExactly(buffer);
+        string data = Encoding.ASCII.GetString(buffer);
+        Console.WriteLine(data);
+        return;
+      }
+      strOffset += strLen;
+      ++idx;
+    }
+  }
+}
+
+void ProcessTable(ref TABLE table, FileStream file, int pageSize, int pageNumber)
+{
+  if (pageNumber <= 0)
+    return;
+
+  int currPageOffset = pageSize * pageNumber;
+  file.Seek(currPageOffset, SeekOrigin.Begin);
+  byte pageType = (byte)file.ReadByte();
+
+  int cellCount = ReadInt16(file, currPageOffset + 3);
+
+  if (pageType == LEAF_TABLE)
+  {
+    table.rowCount += cellCount;
+
+    int cellPtrOffset = 8;
+    for (int i = 0; i < cellCount; ++i)
+    {
+      int cellContentOffset = ReadInt16(file, currPageOffset + cellPtrOffset + i * 2);
+      table.cells.Add(currPageOffset + cellContentOffset);
+    }
+  }
+  else if (pageType == INTERIOR_TABLE)
+  {
+    file.Seek(currPageOffset + 8, SeekOrigin.Begin);
+    Span<byte> buffer = stackalloc byte[4];
+    file.ReadExactly(buffer);
+    int rightmostChild = (buffer[0] << 24) | (buffer[1] << 16) | (buffer[2] << 8) | buffer[3];
+
+    ProcessTable(ref table, file, pageSize, rightmostChild);
+
+    int cellPointerArray = 12;
+
+    for (int i = 0; i < cellCount; i++)
+    {
+      int cellOffset = ReadInt16(file, currPageOffset + cellPointerArray + i * 2);
+
+      file.Seek(currPageOffset + cellOffset, SeekOrigin.Begin);
+      file.ReadExactly(buffer);
+      int childPage = (buffer[0] << 24) | (buffer[1] << 16) | (buffer[2] << 8) | buffer[3];
+
+      ProcessTable(ref table, file, pageSize, childPage);
+    }
+  }
+  else
+  {
+    throw new Exception($"Unknown pageType 0x{pageType:X2}");
+  }
+}
 
 static TABLE[] GetTables(FileStream bufStream)
 {
