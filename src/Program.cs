@@ -14,6 +14,8 @@ var (path, command) = args.Length switch
   1 => throw new InvalidOperationException("Missing <command>"),
   _ => (args[0], args[1])
 };
+string origCommand = command;
+command = command.ToLower();
 
 var databaseFile = File.OpenRead(path);
 
@@ -37,10 +39,8 @@ else if (command.StartsWith("select count(*) from"))
 {
   string tableName = command[(command.LastIndexOf(' ') + 1)..];
   TABLE table = GetTables(databaseFile).First(t => t.tblName == tableName);
-
-  int tablePageNumber = table.rootpage - 1;
   int pageSize = ReadInt16(databaseFile, 16);
-  ProcessTable(ref table, databaseFile, pageSize, tablePageNumber);
+  ProcessTable(ref table, databaseFile, pageSize, table.rootpage);
   Console.WriteLine(table.rowCount);
 }
 else if (command.StartsWith("select"))
@@ -62,17 +62,17 @@ else if (command.StartsWith("select"))
 
   int[] columnIndices = [.. columnNames.Select(columnName => Array.IndexOf(columns, columnName))];
   int pageSize = ReadInt16(databaseFile, 16);
-  ProcessTable(ref table, databaseFile, pageSize, table.rootpage - 1);
+  ProcessTable(ref table, databaseFile, pageSize, table.rootpage);
 
-  int filterIndex = 0;
+  int filterIndex = -1;
   string filterStr = "";
   int whereIndex = command.IndexOf(" where ");
   if (whereIndex != -1)
   {
-    string whereClause = command[(whereIndex + 7)..];
-    string[] whereParts = whereClause.Split(' ', StringSplitOptions.TrimEntries);
+    string whereClause = origCommand[(whereIndex + 7)..];
+    string[] whereParts = whereClause.Split(" = ", StringSplitOptions.TrimEntries);
     string filterColumnStr = whereParts[0];
-    filterStr = whereParts[2][1..^1];
+    filterStr = whereParts[1][1..^1];
     filterIndex = Array.IndexOf(columns, filterColumnStr);
   }
 
@@ -126,11 +126,11 @@ void PrintRow(FileStream file, int cellOffset, int[] columnIndices, int filterIn
   int headerSize = file.ReadByte();
   int contentOffset = payloadOffset + headerSize;
   Span<byte> stackBuf = stackalloc byte[512];
+  cellOffset += 1;
 
   Dictionary<int, string> rowStr = [];
   HashSet<int> neededColumns = [.. columnIndices];
-
-  for (int idx = 1, strOffset = 0; (cellOffset - payloadOffset) < headerSize;)
+  for (int idx = 0, strOffset = 0; (cellOffset - payloadOffset) < headerSize; ++idx)
   {
     int serialType = ReadVarInt(file, ref cellOffset);
     if (serialType > 13)
@@ -141,7 +141,7 @@ void PrintRow(FileStream file, int cellOffset, int[] columnIndices, int filterIn
         Span<byte> buffer = strLen <= 512 ? stackBuf[..strLen] : new byte[strLen];
         file.Seek(contentOffset + strOffset, SeekOrigin.Begin);
         file.ReadExactly(buffer);
-        string data = Encoding.ASCII.GetString(buffer);
+        string data = Encoding.UTF8.GetString(buffer);
 
         if (filterIndex == idx && data != filterStr)
           return;
@@ -152,9 +152,11 @@ void PrintRow(FileStream file, int cellOffset, int[] columnIndices, int filterIn
           break;
       }
       strOffset += strLen;
-      ++idx;
     }
+    else if (filterIndex == idx)
+      return;
   }
+  rowStr[0] = rowId.ToString();
   string res = string.Join("|", columnIndices.Select(col => rowStr[col]));
   Console.WriteLine(res);
 }
@@ -164,7 +166,7 @@ void ProcessTable(ref TABLE table, FileStream file, int pageSize, int pageNumber
   if (pageNumber <= 0)
     return;
 
-  int currPageOffset = pageSize * pageNumber;
+  int currPageOffset = pageSize * (pageNumber - 1);
   file.Seek(currPageOffset, SeekOrigin.Begin);
   byte pageType = (byte)file.ReadByte();
 
@@ -181,7 +183,7 @@ void ProcessTable(ref TABLE table, FileStream file, int pageSize, int pageNumber
       table.cells.Add(currPageOffset + cellContentOffset);
     }
   }
-  else if (pageType == INTERIOR_TABLE)
+  else if (pageType == INTERIOR_TABLE || pageType == INTERIOR_INDEX)
   {
     file.Seek(currPageOffset + 8, SeekOrigin.Begin);
     Span<byte> buffer = stackalloc byte[4];
