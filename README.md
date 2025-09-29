@@ -1,76 +1,128 @@
-[![progress-banner](https://backend.codecrafters.io/progress/sqlite/8c37991c-d18f-4447-a2e7-d2892b924c00)](https://app.codecrafters.io/users/codecrafters-bot?r=2qF)
+# sqlite_clone_csharp
 
-This is a starting point for C# solutions to the
-["Build Your Own SQLite" Challenge](https://codecrafters.io/challenges/sqlite).
+A minimal **SQLite clone written in C#** for learning purposes.
+This project explores how SQLite works under the hood by parsing the SQLite database file format and supporting a few basic commands.
 
-In this challenge, you'll build a barebones SQLite implementation that supports
-basic SQL queries like `SELECT`. Along the way we'll learn about
-[SQLite's file format](https://www.sqlite.org/fileformat.html), how indexed data
-is
-[stored in B-trees](https://jvns.ca/blog/2014/10/02/how-does-sqlite-work-part-2-btrees/)
-and more.
+---
 
-**Note**: If you're viewing this repo on GitHub, head over to
-[codecrafters.io](https://codecrafters.io) to try the challenge.
+## ✨ Features
 
-# Passing the first stage
+* Read SQLite database files directly (no dependency on the official SQLite engine).
+* Supports:
 
-The entry point for your SQLite implementation is in `src/Program.cs`. Study and
-uncomment the relevant code, and push your changes to pass the first stage:
+  * `.dbinfo` → shows database page size and number of tables.
+  * `.tables` → lists all tables in the database.
+  * `SELECT COUNT(*) FROM <table>` → counts rows in a given table.
+  * `SELECT <columns> FROM <table>` → fetches table rows with optional `WHERE` filtering.
+* Parses:
 
-```sh
-git commit -am "pass 1st stage" # any msg
-git push origin master
+  * Page headers
+  * B-tree structures (interior and leaf pages)
+  * Table schemas
+  * Records and serial types
+
+---
+
+## 📦 Installation
+
+Clone the repository:
+
+```bash
+git clone https://github.com/rahulsenna/sqlite_clone_csharp.git
+cd sqlite_clone_csharp
 ```
 
-Time to move on to the next stage!
+Build the project:
 
-# Stage 2 & beyond
-
-Note: This section is for stages 2 and beyond.
-
-1. Ensure you have `dotnet (9.0)` installed locally
-1. Run `./your_program.sh` to run your program, which is implemented in
-   `src/Program.cs`.
-1. Commit your changes and run `git push origin master` to submit your solution
-   to CodeCrafters. Test output will be streamed to your terminal.
-
-# Sample Databases
-
-To make it easy to test queries locally, we've added a sample database in the
-root of this repository: `sample.db`.
-
-This contains two tables: `apples` & `oranges`. You can use this to test your
-implementation for the first 6 stages.
-
-You can explore this database by running queries against it like this:
-
-```sh
-$ sqlite3 sample.db "select id, name from apples"
-1|Granny Smith
-2|Fuji
-3|Honeycrisp
-4|Golden Delicious
+```bash
+dotnet build
 ```
 
-There are two other databases that you can use:
+Run it:
 
-1. `superheroes.db`:
-   - This is a small version of the test database used in the table-scan stage.
-   - It contains one table: `superheroes`.
-   - It is ~1MB in size.
-1. `companies.db`:
-   - This is a small version of the test database used in the index-scan stage.
-   - It contains one table: `companies`, and one index: `idx_companies_country`
-   - It is ~7MB in size.
-
-These aren't included in the repository because they're large in size. You can
-download them by running this script:
-
-```sh
-./download_sample_databases.sh
+```bash
+dotnet run -- <database file> <command>
 ```
 
-If the script doesn't work for some reason, you can download the databases
-directly from
-[codecrafters-io/sample-sqlite-databases](https://github.com/codecrafters-io/sample-sqlite-databases).
+---
+
+## 🖥️ Usage Examples
+
+### Show database info
+
+```bash
+dotnet run -- sample.db .dbinfo
+```
+
+### List tables
+
+```bash
+dotnet run -- sample.db .tables
+```
+
+### Count rows in a table
+
+```bash
+dotnet run -- sample.db "SELECT COUNT(*) FROM users"
+```
+
+### Select specific columns
+
+```bash
+dotnet run -- sample.db "SELECT id, name FROM users"
+```
+
+### With `WHERE` filtering
+
+```bash
+dotnet run -- sample.db "SELECT id, name FROM users WHERE name = 'Alice'"
+```
+
+---
+
+## 📖 Learning Goals
+
+This project is **not a full SQLite replacement**.
+Instead, it’s a tool for understanding:
+
+* How SQLite stores tables, rows, and indexes on disk.
+* How B-tree pages are structured (leaf vs. interior nodes).
+* How to parse variable-length integers and serial types.
+* How a simple SQL execution engine can be built from scratch.
+
+---
+
+## 🛠️ Project Structure
+
+* `Program.cs` → main entry point with command parsing and execution
+* `TABLE` struct → represents table schema and row storage
+* Helper functions:
+
+  * `ReadInt16`, `ReadVarInt` → binary parsing
+  * `ProcessTable` → traverses B-tree pages
+  * `GetTables` / `GetTable` → extracts schema from `sqlite_schema`
+
+---
+
+## 🚧 Limitations
+
+* Only supports a subset of SQL (`.dbinfo`, `.tables`, `SELECT`, `COUNT`, simple `WHERE`).
+* Does not support `INSERT`, `UPDATE`, `DELETE`.
+* Not optimized for performance.
+* Tested on small SQLite databases only.
+
+---
+
+## 📚 References
+
+* [SQLite File Format](https://www.sqlite.org/fileformat.html)
+* [SQLite B-Tree Overview](https://www.sqlite.org/fileformat2.html)
+* [How SQLite Works](https://sqlite.org/arch.html)
+
+---
+
+
+## 📜 License
+
+MIT License.
+See [LICENSE](LICENSE) for details.

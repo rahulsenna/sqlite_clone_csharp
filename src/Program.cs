@@ -86,19 +86,19 @@ else
   throw new InvalidOperationException($"Invalid command: {command}");
 }
 
-static int ReadInt16(FileStream bufStream, int offset)
+static int ReadInt16(FileStream file, int offset)
 {
   Span<byte> buffer = stackalloc byte[2];
-  bufStream.Seek(offset, SeekOrigin.Begin);
-  bufStream.ReadExactly(buffer);
+  file.Seek(offset, SeekOrigin.Begin);
+  file.ReadExactly(buffer);
   return ReadUInt16BigEndian(buffer);
 }
 
-static int ReadVarInt(FileStream bufStream, ref int offset)
+static int ReadVarInt(FileStream file, ref int offset)
 {
   Span<byte> buffer = stackalloc byte[9];
-  bufStream.Seek(offset, SeekOrigin.Begin);
-  bufStream.ReadExactly(buffer);
+  file.Seek(offset, SeekOrigin.Begin);
+  file.ReadExactly(buffer);
 
   int value = 0;
   for (int i = 0; i < 8; i++)
@@ -114,7 +114,6 @@ static int ReadVarInt(FileStream bufStream, ref int offset)
   offset++;
   return value;
 }
-;
 
 void PrintRow(FileStream file, int cellOffset, int[] columnIndices, int filterIndex, string filterStr)
 {
@@ -211,28 +210,28 @@ void ProcessTable(ref TABLE table, FileStream file, int pageSize, int pageNumber
   }
 }
 
-static TABLE[] GetTables(FileStream bufStream)
+static TABLE[] GetTables(FileStream file)
 {
-  int cellCount = ReadInt16(bufStream, 103);
+  int cellCount = ReadInt16(file, 103);
   List<TABLE> tables = [];
   for (int i = 0; i < cellCount; ++i)
   {
     int cellPtrOffset = 108;
-    int cellContentOffset = ReadInt16(bufStream, cellPtrOffset + i * 2);
-    TABLE tableName = GetTable(bufStream, cellContentOffset);
+    int cellContentOffset = ReadInt16(file, cellPtrOffset + i * 2);
+    TABLE tableName = GetTable(file, cellContentOffset);
     tables.Add(tableName);
   }
   return [.. tables];
 }
 
-static TABLE GetTable(FileStream bufStream, int offset)
+static TABLE GetTable(FileStream file, int offset)
 {
   int cellOffset = offset;
-  int payloadSize = ReadVarInt(bufStream, ref cellOffset);
-  int rowid = ReadVarInt(bufStream, ref cellOffset);
+  int payloadSize = ReadVarInt(file, ref cellOffset);
+  int rowid = ReadVarInt(file, ref cellOffset);
 
-  bufStream.Seek(cellOffset, SeekOrigin.Begin);
-  int headerSize = bufStream.ReadByte();
+  file.Seek(cellOffset, SeekOrigin.Begin);
+  int headerSize = file.ReadByte();
   int savedOffset = cellOffset;
   int dataOffset = savedOffset + headerSize;
 
@@ -242,14 +241,14 @@ static TABLE GetTable(FileStream bufStream, int offset)
 
   for (int col = 0; col < 5 && ((cellOffset - savedOffset) < headerSize); ++col)
   {
-    int serialType = ReadVarInt(bufStream, ref cellOffset);
+    int serialType = ReadVarInt(file, ref cellOffset);
 
     if (serialType >= 13 && serialType % 2 == 1)
     {
       int strLen = (serialType - 13) / 2;
       Span<byte> buffer = strLen <= 512 ? stackBuf[..strLen] : new byte[strLen];
-      bufStream.Seek(dataOffset, SeekOrigin.Begin);
-      bufStream.ReadExactly(buffer);
+      file.Seek(dataOffset, SeekOrigin.Begin);
+      file.ReadExactly(buffer);
       var str = Encoding.ASCII.GetString(buffer);
       switch (col)
       {
@@ -262,7 +261,7 @@ static TABLE GetTable(FileStream bufStream, int offset)
     }
     else if (col == 3)                    // sqlite_schema.rootpage
     {
-      var (value, bytesRead) = ParseRootPage(bufStream, dataOffset, serialType);
+      var (value, bytesRead) = ParseRootPage(file, dataOffset, serialType);
       res.rootpage = value;
       dataOffset += bytesRead;
     }
@@ -270,40 +269,40 @@ static TABLE GetTable(FileStream bufStream, int offset)
   return res;
 }
 
-static (int, int) ParseRootPage(FileStream bufStream, int offset, int serialType)
+static (int, int) ParseRootPage(FileStream file, int offset, int serialType)
 {
   if (serialType == 0 || serialType == 8 || serialType == 9 || serialType == 12 || serialType == 13)
     return (0, 0);
 
   int res = -1;
 
-  bufStream.Seek(offset, SeekOrigin.Begin);
+  file.Seek(offset, SeekOrigin.Begin);
   if (serialType == 1)
   {
-    res = bufStream.ReadByte();
+    res = file.ReadByte();
   }
   else if (serialType == 2)
   {
     Span<byte> buffer = stackalloc byte[2];
-    bufStream.ReadExactly(buffer);
+    file.ReadExactly(buffer);
     res = (buffer[0] << 8) | buffer[1];
   }
   else if (serialType == 3)
   {
     Span<byte> buffer = stackalloc byte[3];
-    bufStream.ReadExactly(buffer);
+    file.ReadExactly(buffer);
     res = (buffer[0] << 16) | (buffer[1] << 8) | buffer[2];
 
   }
   else if (serialType == 4)
   {
     Span<byte> buffer = stackalloc byte[4];
-    bufStream.ReadExactly(buffer);
+    file.ReadExactly(buffer);
     res = (buffer[0] << 24) | (buffer[1] << 16) | (buffer[2] << 8) | buffer[3];
   }
   else
   {
-    throw new Exception("unknown serialType");
+    throw new Exception($"unknown serialType {serialType}");
   }
 
   return (res, serialType);
